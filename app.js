@@ -631,9 +631,148 @@ async function resumeSession() {
   addMsg('#hostLog', null, 'Partita ripresa dal punto esatto in cui l\'avevi lasciata.');
 }
 
+// ===================================================================
+// Stati salvati: copie multiple in sessioni/<gioco>/<data>_<ora> - <nome>.state.gz
+// ===================================================================
+const slots = { list: [], busy: false };
+const encPath = (p) => p.split('/').map(encodeURIComponent).join('/');
+const slotDir = () => 'sessioni/' + window.EJS_gameName;
+const pad2 = (n) => String(n).padStart(2, '0');
+
+function slotInfo(fileName) {
+  const m = fileName.match(/^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})(?: - (.+))?\.state\.gz$/);
+  if (!m) return { label: fileName, date: '' };
+  return { label: m[7] || 'Stato senza nome', date: m[3] + '/' + m[2] + '/' + m[1] + ' alle ' + m[4] + ':' + m[5] };
+}
+
+async function refreshSlots() {
+  const res = await gh.api('/contents/' + encPath(slotDir()));
+  if (res.status === 404) slots.list = [];
+  else if (!res.ok) throw new Error('HTTP ' + res.status);
+  else {
+    slots.list = (await res.json())
+      .filter((f) => f.type === 'file' && f.name.endsWith('.state.gz'))
+      .sort((a, b) => b.name.localeCompare(a.name));
+  }
+  renderSlots();
+}
+
+function renderSlots() {
+  const ul = $('#slotList');
+  ul.textContent = '';
+  if (!slots.list.length) {
+    const li = document.createElement('li');
+    li.className = 'empty';
+    li.textContent = 'Nessuno stato salvato. Premi "Salva stato" per crearne uno.';
+    ul.append(li);
+    return;
+  }
+  for (const item of slots.list) {
+    const { label, date } = slotInfo(item.name);
+    const li = document.createElement('li');
+    const info = document.createElement('div');
+    info.className = 'info';
+    const b = document.createElement('b');
+    b.textContent = label;
+    const s = document.createElement('small');
+    s.textContent = date;
+    info.append(b, s);
+    const load = document.createElement('button');
+    load.className = 'btn mini primary';
+    load.textContent = 'Carica';
+    load.onclick = () => loadSlot(item, load);
+    const del = document.createElement('button');
+    del.className = 'btn mini';
+    del.textContent = '🗑';
+    del.title = 'Elimina';
+    del.onclick = () => deleteSlot(item);
+    li.append(info, load, del);
+    ul.append(li);
+  }
+}
+
+async function saveSlot() {
+  if (slots.busy) return;
+  slots.busy = true;
+  const btn = $('#slotSave');
+  btn.disabled = true;
+  btn.textContent = 'Salvo…';
+  try {
+    const state = await readState();
+    if (!state) throw new Error('stato non disponibile');
+    const d = new Date();
+    const stamp = d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate())
+      + '_' + pad2(d.getHours()) + '-' + pad2(d.getMinutes()) + '-' + pad2(d.getSeconds());
+    const label = $('#slotName').value.replace(/[^\p{L}\p{N} _-]/gu, '').trim().slice(0, 30);
+    const name = stamp + (label ? ' - ' + label : '') + '.state.gz';
+    const res = await gh.api('/contents/' + encPath(slotDir() + '/' + name), {
+      method: 'PUT',
+      body: { message: 'Stato salvato: ' + window.EJS_gameName + ' ' + stamp, content: toB64(await gzip(state)) },
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    $('#slotName').value = '';
+    setSession('💾 Stato salvato: ' + (label || 'senza nome') + ' (' + timeStr(d) + ').');
+    await refreshSlots();
+  } catch (e) {
+    setSession('⚠ Stato non salvato (' + e.message + ').');
+  } finally {
+    slots.busy = false;
+    btn.disabled = false;
+    btn.textContent = '💾 Salva stato';
+  }
+}
+
+async function loadSlot(item, btn) {
+  if (slots.busy) return;
+  slots.busy = true;
+  btn.disabled = true;
+  btn.textContent = '…';
+  try {
+    const raw = await gh.api('/contents/' + encPath(item.path), { accept: 'application/vnd.github.raw' });
+    if (!raw.ok) throw new Error('HTTP ' + raw.status);
+    const state = await gunzip(new Uint8Array(await raw.arrayBuffer()));
+    gm().loadState(state);
+    const { label, date } = slotInfo(item.name);
+    setSession('⏯ Caricato: ' + label + ' (' + date + ').');
+    addMsg('#hostLog', null, 'Caricato lo stato "' + label + '".');
+    // Il salvataggio di gioco contenuto nello stato non va trattato come nuovo
+    await new Promise((r) => setTimeout(r, 500));
+    saves.last = (await readSave()) || saves.last;
+    // Aggiorno anche la sessione di ripresa automatica
+    setTimeout(() => saveSession('auto'), 1500);
+  } catch (e) {
+    setSession('⚠ Stato non caricato (' + e.message + ').');
+  } finally {
+    slots.busy = false;
+    btn.disabled = false;
+    btn.textContent = 'Carica';
+  }
+}
+
+async function deleteSlot(item) {
+  const { label, date } = slotInfo(item.name);
+  if (!window.confirm('Eliminare lo stato "' + label + '" del ' + date + '?')) return;
+  try {
+    const res = await gh.api('/contents/' + encPath(item.path), {
+      method: 'DELETE',
+      body: { message: 'Stato eliminato: ' + item.name, sha: item.sha },
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    await refreshSlots();
+  } catch (e) {
+    setSession('⚠ Non sono riuscito a eliminarlo (' + e.message + ').');
+  }
+}
+
 async function setupSessions() {
-  $('#sessionBtn').hidden = false;
-  $('#sessionBtn').onclick = () => saveSession('manuale');
+  const nameInput = $('#slotName');
+  ['keydown', 'keyup', 'keypress'].forEach((t) => nameInput.addEventListener(t, (e) => {
+    e.stopPropagation();
+    if (t === 'keydown' && e.key === 'Enter') saveSlot();
+  }));
+  $('#slotSave').disabled = false;
+  $('#slotSave').onclick = saveSlot;
+  refreshSlots().catch((e) => setSession('⚠ Non riesco a leggere gli stati salvati (' + e.message + ').'));
   setSession('⏳ Cerco una sessione salvata…');
   try { await resumeSession(); } catch (e) { setSession('⚠ Non sono riuscito a riprendere la sessione (' + e.message + ').'); }
   session.snapTimer = setInterval(() => { snapshot().catch(() => {}); }, 15000);

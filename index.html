@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>GBA Insieme</title>
-<link rel="stylesheet" href="style.css?v=9">
+<link rel="stylesheet" href="style.css?v=11">
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 </head>
 <body>
@@ -106,8 +106,12 @@
       <p id="saveInfo" class="hint">Il salvataggio del gioco viene copiato nel browser ogni 15 secondi.</p>
       <p id="cloudInfo" class="hint" hidden></p>
 
-      <div class="label">Sessione</div>
-      <button id="sessionBtn" class="btn" hidden>⏯ Salva sessione su GitHub</button>
+      <div class="label">Stati salvati</div>
+      <div class="row">
+        <input id="slotName" placeholder="Nome (facoltativo)" maxlength="30" autocomplete="off">
+        <button id="slotSave" class="btn primary" disabled>💾 Salva stato</button>
+      </div>
+      <ul id="slotList" class="slots"><li class="empty">Apri il gioco dalla libreria GitHub per salvare gli stati.</li></ul>
       <p id="sessionInfo" class="hint">Collega l'archivio GitHub per riprendere la partita dal punto esatto.</p>
 
       <p id="hostUsage" class="usage" hidden></p>
@@ -178,6 +182,6 @@
   </section>
 </main>
 
-<script src="app.js?v=10"></script>
+<script src="app.js?v=11"></script>
 </body>
 </html>

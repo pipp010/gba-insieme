@@ -126,6 +126,14 @@ body.has-control .badge { background: color-mix(in srgb, var(--ok) 25%, var(--su
 .guests li { display: flex; align-items: center; justify-content: space-between; gap: 8px; background: var(--surface-2); padding: 6px 8px; border-radius: 8px; }
 .guests li.empty { color: var(--muted); background: none; padding: 0; }
 
+.slots { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 230px; overflow-y: auto; }
+.slots li { display: flex; align-items: center; gap: 6px; background: var(--surface-2); padding: 6px 8px; border-radius: 8px; }
+.slots li.empty { color: var(--muted); background: none; padding: 0; font-size: .9rem; }
+.slots .info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.slots .info b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.slots .info small { color: var(--muted); }
+.slots .btn.mini { margin-left: 0; }
+
 .chat { display: flex; flex-direction: column; gap: 8px; }
 .log { height: 220px; overflow-y: auto; background: var(--bg); border-radius: 8px; padding: 8px; font-size: .92rem; }
 .msg { margin-bottom: 4px; overflow-wrap: anywhere; }
