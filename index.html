@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GBA Insieme</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+</head>
+<body>
+<header class="top"><span class="logo">🎮 GBA Insieme</span></header>
+
+<main>
+  <!-- HOME -->
+  <section id="home" class="screen">
+    <h1>Gioca al GBA in compagnia</h1>
+    <p class="lead">Tu giochi, i tuoi amici guardano in diretta. Quando vuoi, passi i comandi.</p>
+
+    <label class="field">Il tuo nome
+      <input id="name" maxlength="24" placeholder="es. Pippo" autocomplete="nickname">
+    </label>
+
+    <div class="cards">
+      <div class="card" id="hostCard">
+        <h2>Gioca e trasmetti</h2>
+        <p>Scegli il file del gioco (.gba) dal tuo computer. Il file resta sul tuo PC: non viene caricato da nessuna parte.</p>
+        <label class="btn primary">Scegli il gioco…
+          <input type="file" id="romFile" accept=".gba,.gb,.gbc,.zip,.7z" hidden>
+        </label>
+      </div>
+      <div class="card" id="joinCard">
+        <h2>Entra in una stanza</h2>
+        <p id="joinText">Hai ricevuto un link o un codice? Inseriscilo qui.</p>
+        <form id="joinForm" class="row">
+          <input id="joinCode" placeholder="Codice stanza" maxlength="80" autocomplete="off">
+          <button class="btn primary">Entra</button>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <!-- HOST -->
+  <section id="host" class="screen" hidden>
+    <div class="stage">
+      <div id="gameWrap"><div id="game"></div></div>
+      <p class="hint">Tasti: frecce = croce · Z = A · X = B · Q = L · E = R · Invio = Start · V = Select</p>
+    </div>
+    <aside class="panel">
+      <p id="hostStatus" class="status">Apro la stanza…</p>
+
+      <div id="shareBox" hidden>
+        <div class="label">Codice stanza</div>
+        <div id="roomCode" class="code"></div>
+        <div class="row">
+          <input id="roomLink" readonly>
+          <button id="copyBtn" class="btn">Copia link</button>
+        </div>
+      </div>
+
+      <div class="label">Chi comanda</div>
+      <div id="controlState" class="badge">🎮 I comandi sono tuoi</div>
+      <button id="takeBack" class="btn" hidden>Riprendi i comandi</button>
+
+      <div class="label">Salvataggio</div>
+      <div class="row">
+        <button id="saveDl" class="btn grow" disabled>⬇ Scarica .sav</button>
+        <label id="saveUpLabel" class="btn grow disabled">⬆ Carica .sav
+          <input type="file" id="saveUp" accept=".sav,.srm" hidden disabled>
+        </label>
+      </div>
+      <p id="saveInfo" class="hint">Il salvataggio del gioco viene copiato nel browser ogni 15 secondi.</p>
+
+      <div class="label">Spettatori</div>
+      <ul id="guestList" class="guests"><li class="empty">Nessuno per ora</li></ul>
+
+      <div class="chat">
+        <div id="hostLog" class="log"></div>
+        <form id="hostChatForm" class="row">
+          <input placeholder="Scrivi un messaggio…" maxlength="500">
+          <button class="btn">Invia</button>
+        </form>
+      </div>
+    </aside>
+  </section>
+
+  <!-- OSPITE -->
+  <section id="guest" class="screen" hidden>
+    <div class="stage">
+      <div class="videoWrap">
+        <video id="remote" autoplay playsinline></video>
+        <button id="unmute" class="btn primary overlay" hidden>🔊 Tocca per attivare l'audio</button>
+      </div>
+
+      <div class="pad" aria-label="Comandi">
+        <div class="shoulders"><button data-b="L">L</button><button data-b="R">R</button></div>
+        <div class="padRow">
+          <div class="dpad">
+            <button data-b="UP" class="up" aria-label="Su">▲</button>
+            <button data-b="LEFT" class="left" aria-label="Sinistra">◀</button>
+            <button data-b="RIGHT" class="right" aria-label="Destra">▶</button>
+            <button data-b="DOWN" class="down" aria-label="Giù">▼</button>
+          </div>
+          <div class="mid">
+            <button data-b="SELECT" class="pill">SELECT</button>
+            <button data-b="START" class="pill">START</button>
+          </div>
+          <div class="ab">
+            <button data-b="B" class="round">B</button>
+            <button data-b="A" class="round">A</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <aside class="panel">
+      <p id="guestStatus" class="status">Mi collego…</p>
+      <div id="controlBadge" class="badge">👀 Stai guardando</div>
+      <button id="askBtn" class="btn primary">Chiedi i comandi</button>
+      <p class="hint">Quando hai i comandi: frecce · Z = A · X = B · Q = L · E = R · Invio = Start · V = Select. Funziona anche un gamepad o i tasti sullo schermo.</p>
+
+      <div class="chat">
+        <div id="guestLog" class="log"></div>
+        <form id="guestChatForm" class="row">
+          <input placeholder="Scrivi un messaggio…" maxlength="500">
+          <button class="btn">Invia</button>
+        </form>
+      </div>
+    </aside>
+  </section>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

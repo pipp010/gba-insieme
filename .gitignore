@@ -1,0 +1,9 @@
+# Mai caricare giochi o salvataggi
+*.gba
+*.gb
+*.gbc
+*.zip
+*.7z
+*.sav
+*.srm
+_test/
