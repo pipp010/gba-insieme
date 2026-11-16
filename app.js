@@ -90,6 +90,7 @@ function startHost(file) {
   store('name', getName());
   host.active = true;
   show('host');
+  startUsageMeter('#hostUsage');
 
   Object.assign(window, {
     EJS_player: '#game',
@@ -152,28 +153,31 @@ function onGameStart() {
 const saveDB = {
   open() {
     return new Promise((res, rej) => {
-      const r = indexedDB.open('gbainsieme', 1);
-      r.onupgradeneeded = () => r.result.createObjectStore('saves');
+      // v2: aggiunto l'archivio 'roms' (copia locale dei giochi scaricati da GitHub)
+      const r = indexedDB.open('gbainsieme', 2);
+      r.onupgradeneeded = () => {
+        for (const s of ['saves', 'roms']) if (!r.result.objectStoreNames.contains(s)) r.result.createObjectStore(s);
+      };
       r.onsuccess = () => res(r.result);
       r.onerror = () => rej(r.error);
     });
   },
-  async get(key) {
+  async get(key, store = 'saves') {
     try {
       const db = await this.open();
       return await new Promise((res, rej) => {
-        const r = db.transaction('saves').objectStore('saves').get(key);
+        const r = db.transaction(store).objectStore(store).get(key);
         r.onsuccess = () => res(r.result || null);
         r.onerror = () => rej(r.error);
       });
     } catch (_) { return null; }
   },
-  async set(key, value) {
+  async set(key, value, store = 'saves') {
     try {
       const db = await this.open();
       await new Promise((res, rej) => {
-        const tx = db.transaction('saves', 'readwrite');
-        tx.objectStore('saves').put(value, key);
+        const tx = db.transaction(store, 'readwrite');
+        tx.objectStore(store).put(value, key);
         tx.oncomplete = res;
         tx.onerror = () => rej(tx.error);
       });
@@ -228,6 +232,8 @@ async function backupToBrowser() {
     $('#saveInfo').textContent = '⚠ Il browser non permette di salvare: usa "Scarica .sav".';
   }
   queueUpload(data);
+  // Dopo ogni salvataggio nel gioco salvo anche la sessione, così non resta mai più vecchia del .sav
+  if (session.timer) saveSession('sav');
 }
 
 async function setupSaves() {
@@ -251,6 +257,9 @@ async function setupSaves() {
 
   // Confronto con il salvataggio su GitHub (se l'archivio è collegato)
   if (gh.cfg) await initialCloudSync(current);
+
+  // Sessione (punto esatto della partita) salvata su GitHub
+  if (gh.cfg) setupSessions();
 
   saves.timer = setInterval(backupToBrowser, 15000);
   document.addEventListener('visibilitychange', () => { if (document.hidden) backupToBrowser(); });
@@ -482,18 +491,178 @@ async function refreshRoms() {
 
 async function loadRomFromGitHub(item, btn, label) {
   btn.disabled = true;
-  label.textContent = 'Scarico…';
   try {
-    const path = item.path.split('/').map(encodeURIComponent).join('/');
-    const res = await gh.api('/contents/' + path, { accept: 'application/vnd.github.raw' });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const blob = await res.blob();
+    // Se il gioco è già stato scaricato (stessa versione), lo prendo dalla copia nel browser
+    const cached = await saveDB.get(item.path, 'roms');
+    let blob;
+    if (cached && cached.sha === item.sha && cached.blob) {
+      label.textContent = 'Avvio…';
+      blob = cached.blob;
+    } else {
+      label.textContent = 'Scarico…';
+      const path = item.path.split('/').map(encodeURIComponent).join('/');
+      const res = await gh.api('/contents/' + path, { accept: 'application/vnd.github.raw' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      blob = await res.blob();
+      await saveDB.set(item.path, { sha: item.sha, blob }, 'roms');
+    }
     startHost(new File([blob], item.name));
   } catch (e) {
     btn.disabled = false;
     label.textContent = 'Errore, riprova';
     $('#ghError').textContent = 'Download non riuscito (' + e.message + ').';
   }
+}
+
+// ===================================================================
+// Sessioni: il punto esatto della partita, salvato su GitHub (sessioni/<gioco>.state.gz)
+// ===================================================================
+const session = { sha: null, lastHash: null, busy: false, timer: null };
+const SESSION_EVERY_MIN = 10;
+const sessionPath = () => '/contents/sessioni/' + encodeURIComponent(window.EJS_gameName + '.state.gz');
+function setSession(text) { const el = $('#sessionInfo'); el.hidden = false; el.textContent = text; }
+
+async function gzip(bytes) {
+  const s = new Blob([bytes]).stream().pipeThrough(new CompressionStream('gzip'));
+  return new Uint8Array(await new Response(s).arrayBuffer());
+}
+async function gunzip(bytes) {
+  const s = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+  return new Uint8Array(await new Response(s).arrayBuffer());
+}
+
+async function readState() {
+  const g = gm();
+  if (!g || typeof g.getState !== 'function') return null;
+  const st = await g.getState();
+  return st && st.length ? new Uint8Array(st) : null;
+}
+
+async function saveSession(reason) {
+  if (!gh.cfg || session.busy) return;
+  session.busy = true;
+  try {
+    const state = await readState();
+    if (!state) throw new Error('stato non disponibile');
+    const h = hashBytes(state);
+    if (h === session.lastHash && reason === 'auto') return;
+    setSession('⏳ Salvo la sessione su GitHub…');
+    const content = toB64(await gzip(state));
+    const body = (sha) => ({ message: 'Sessione ' + window.EJS_gameName, content, ...(sha ? { sha } : {}) });
+    let res = await gh.api(sessionPath(), { method: 'PUT', body: body(session.sha) });
+    if (res.status === 409 || res.status === 422) {
+      const meta = await gh.api(sessionPath());
+      const sha = meta.ok ? (await meta.json()).sha : null;
+      res = await gh.api(sessionPath(), { method: 'PUT', body: body(sha) });
+    }
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    session.sha = (await res.json()).content.sha;
+    session.lastHash = h;
+    setSession('⏯ Sessione salvata su GitHub alle ' + timeStr(Date.now()) + '.');
+  } catch (e) {
+    setSession('⚠ Sessione non salvata (' + e.message + ').');
+  } finally {
+    session.busy = false;
+  }
+}
+
+async function resumeSession() {
+  const meta = await gh.api(sessionPath());
+  if (meta.status === 404) { setSession('Nessuna sessione salvata per questo gioco: la prima verrà salvata tra ' + SESSION_EVERY_MIN + ' minuti o col pulsante.'); return; }
+  if (!meta.ok) throw new Error('HTTP ' + meta.status);
+  const info = await meta.json();
+  session.sha = info.sha;
+  const raw = await gh.api(sessionPath(), { accept: 'application/vnd.github.raw' });
+  if (!raw.ok) throw new Error('HTTP ' + raw.status);
+  const state = await gunzip(new Uint8Array(await raw.arrayBuffer()));
+  // piccola attesa: l'emulatore potrebbe essere appena ripartito per il .sav
+  await new Promise((r) => setTimeout(r, 800));
+  gm().loadState(state);
+  session.lastHash = hashBytes(state);
+  // Il salvataggio contenuto nella sessione non va trattato come "nuovo salvataggio"
+  await new Promise((r) => setTimeout(r, 500));
+  saves.last = (await readSave()) || saves.last;
+  setSession('⏯ Sessione ripresa da GitHub.');
+  addMsg('#hostLog', null, 'Partita ripresa dal punto esatto in cui l\'avevi lasciata.');
+}
+
+async function setupSessions() {
+  $('#sessionBtn').hidden = false;
+  $('#sessionBtn').onclick = () => saveSession('manuale');
+  setSession('⏳ Cerco una sessione salvata…');
+  try { await resumeSession(); } catch (e) { setSession('⚠ Non sono riuscito a riprendere la sessione (' + e.message + ').'); }
+  session.timer = setInterval(() => saveSession('auto'), SESSION_EVERY_MIN * 60000);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) saveSession('auto'); });
+}
+
+// ===================================================================
+// Indicatore dei consumi del ripetitore
+// ===================================================================
+const usage = { prev: new Map(), session: 0, relaySession: 0, timer: null };
+const FREE_GB = 1000;
+const monthKey = () => 'turn-mese-' + new Date().toISOString().slice(0, 7);
+function fmtBytes(b) {
+  if (b < 1048576) return (b / 1024).toFixed(0) + ' KB';
+  if (b < 1073741824) return (b / 1048576).toFixed(1).replace('.', ',') + ' MB';
+  return (b / 1073741824).toFixed(2).replace('.', ',') + ' GB';
+}
+
+function activeConnections() {
+  const list = [];
+  if (host.active) {
+    for (const g of host.guests.values()) list.push(g.conn, g.call);
+  } else if (guest.active) {
+    list.push(guest.conn, guest.call);
+  }
+  return list.map((c) => c && c.peerConnection).filter(Boolean);
+}
+
+async function pcStats(pc) {
+  const s = await pc.getStats();
+  let pair = null;
+  s.forEach((r) => { if (r.type === 'transport' && r.selectedCandidatePairId) pair = s.get(r.selectedCandidatePairId); });
+  if (!pair) s.forEach((r) => { if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded') pair = r; });
+  if (!pair) return null;
+  const l = s.get(pair.localCandidateId);
+  const rm = s.get(pair.remoteCandidateId);
+  return {
+    bytes: (pair.bytesSent || 0) + (pair.bytesReceived || 0),
+    relay: (l && l.candidateType === 'relay') || (rm && rm.candidateType === 'relay'),
+  };
+}
+
+function startUsageMeter(sel) {
+  const el = $(sel);
+  const INTERVAL = 2000;
+  usage.timer = setInterval(async () => {
+    let delta = 0, relayDelta = 0, anyRelay = false, any = false;
+    const seen = new Set();
+    for (const pc of activeConnections()) {
+      seen.add(pc);
+      let st;
+      try { st = await pcStats(pc); } catch (_) { continue; }
+      if (!st) continue;
+      any = true;
+      const d = Math.max(0, st.bytes - (usage.prev.get(pc) || 0));
+      usage.prev.set(pc, st.bytes);
+      delta += d;
+      if (st.relay) { anyRelay = true; relayDelta += d; }
+    }
+    for (const pc of [...usage.prev.keys()]) if (!seen.has(pc)) usage.prev.delete(pc);
+
+    usage.session += delta;
+    usage.relaySession += relayDelta;
+    let month = Number(load(monthKey())) || 0;
+    if (relayDelta) { month += relayDelta; store(monthKey(), String(month)); }
+
+    const kbps = Math.round((delta * 8) / (INTERVAL / 1000) / 1000);
+    const mode = !any ? '—' : anyRelay ? '🔁 tramite ripetitore' : '🔗 diretto (non consuma)';
+    el.hidden = false;
+    el.textContent = '📶 ' + mode + ' · ' + kbps + ' kbps'
+      + ' · sessione ' + fmtBytes(usage.session)
+      + ' (ripetitore ' + fmtBytes(usage.relaySession) + ')'
+      + ' · mese ' + fmtBytes(month) + ' / ' + FREE_GB + ' GB gratis';
+  }, INTERVAL);
 }
 
 function initLibrary() {
@@ -732,6 +901,7 @@ async function startGuest(rawCode) {
   store('name', getName());
   guest.active = true;
   show('guest');
+  startUsageMeter('#guestUsage');
   history.replaceState(null, '', location.pathname + '?stanza=' + code);
   setStatus('guest', 'Mi collego alla stanza ' + code.toUpperCase() + '…');
 
@@ -773,6 +943,7 @@ async function startGuest(rawCode) {
   });
 
   peer.on('call', (call) => {
+    guest.call = call;
     call.answer();
     call.on('stream', (stream) => {
       const v = $('#remote');
