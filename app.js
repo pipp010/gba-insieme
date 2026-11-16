@@ -819,10 +819,25 @@ function initTurnSettings() {
   };
 }
 
-async function openRoom() {
-  const code = randomCode();
+// Il codice della stanza resta lo stesso tra una ricarica e l'altra (salvato nel browser)
+function roomCode() {
+  let code = load('room-code');
+  if (!code || !/^[a-z0-9]{4,12}$/.test(code)) { code = randomCode(); store('room-code', code); }
+  return code;
+}
+
+async function openRoom(attempt = 0) {
+  const code = roomCode();
   const peer = new Peer(PREFIX + code, await peerOptions('#hostLog'));
   host.peer = peer;
+
+  $('#newCodeBtn').onclick = () => {
+    if (!window.confirm('Creare un nuovo codice stanza? Il vecchio link smetterà di funzionare.')) return;
+    store('room-code', randomCode());
+    for (const id of [...host.guests.keys()]) dropGuest(id);
+    host.peer.destroy();
+    openRoom();
+  };
 
   peer.on('open', () => {
     $('#roomLink').value = location.origin + location.pathname + '?stanza=' + code;
@@ -847,7 +862,13 @@ async function openRoom() {
 
   peer.on('disconnected', () => { if (!peer.destroyed) peer.reconnect(); });
   peer.on('error', (e) => {
-    if (e.type === 'unavailable-id') { peer.destroy(); openRoom(); return; }
+    if (e.type === 'unavailable-id') {
+      // Dopo una ricarica il server tiene occupato il codice ancora per qualche secondo: riprovo
+      peer.destroy();
+      setStatus('host', 'Riapro la stanza ' + code.toUpperCase() + '… (tentativo ' + (attempt + 2) + ')');
+      setTimeout(() => openRoom(attempt + 1), attempt < 5 ? 3000 : 10000);
+      return;
+    }
     if (e.type === 'peer-unavailable') return;
     setStatus('host', 'Problema di connessione (' + e.type + '). Ricarica la pagina se persiste.');
   });
@@ -993,26 +1014,44 @@ async function startGuest(rawCode) {
     }
   }, 4000);
 
-  peer.on('open', () => {
-    stage = 'room';
-    diag('Passo 2/3: server raggiunto, cerco la stanza…');
+  // Se l'host ricarica la pagina o non ha ancora aperto la stanza, riprovo da solo ogni 3 secondi
+  const scheduleRetry = () => {
+    if (guest.retryTimer) return;
+    guest.retryTimer = setTimeout(() => {
+      guest.retryTimer = null;
+      if (peer.destroyed) return;
+      if (peer.open) connectToRoom(); else scheduleRetry();
+    }, 3000);
+  };
+
+  const connectToRoom = () => {
+    if (guest.conn) { try { guest.conn.close(); } catch (_) { /* ignora */ } }
     const conn = peer.connect(PREFIX + code, { reliable: true, metadata: { name: getName() } });
     guest.conn = conn;
     conn.on('open', () => {
+      if (guest.conn !== conn) return;
       stage = 'ok';
       guest.connected = true;
       clearInterval(watchdog);
       diag('Passo 3/3: collegato al PC dell\'host ✓');
-      setStatus('guest', 'Connesso! Aspetto che l\'host avvii il gioco…');
+      setStatus('guest', 'Connesso! Aspetto la diretta…');
     });
     conn.on('error', (e) => diag('Errore del collegamento: ' + (e.type || e.message || e)));
     conn.on('data', onHostData);
     conn.on('close', () => {
+      if (guest.conn !== conn) return;
       guest.live = false;
       guest.connected = false;
       setGuestControl(false);
-      setStatus('guest', 'La stanza è stata chiusa dall\'host.');
+      setStatus('guest', 'L\'host si è scollegato: aspetto che torni…');
+      scheduleRetry();
     });
+  };
+
+  peer.on('open', () => {
+    stage = 'room';
+    diag('Passo 2/3: server raggiunto, cerco la stanza…');
+    connectToRoom();
   });
 
   peer.on('call', (call) => {
@@ -1035,9 +1074,13 @@ async function startGuest(rawCode) {
 
   peer.on('disconnected', () => { if (!peer.destroyed) peer.reconnect(); });
   peer.on('error', (e) => {
-    setStatus('guest', e.type === 'peer-unavailable'
-      ? 'Stanza non trovata. Controlla il link o chiedi all\'host di riaprirla.'
-      : 'Problema di connessione (' + e.type + ').');
+    if (e.type === 'peer-unavailable') {
+      setStatus('guest', 'La stanza ' + code.toUpperCase() + ' non è aperta: aspetto che l\'host la apra…');
+      scheduleRetry();
+      return;
+    }
+    setStatus('guest', 'Problema di connessione (' + e.type + '). Riprovo…');
+    scheduleRetry();
   });
 
   $('#unmute').onclick = () => {
