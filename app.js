@@ -90,7 +90,7 @@ function setupChat(formSel, onSend) {
 const host = { peer: null, guests: new Map(), control: 'host', started: false, video: null, active: false };
 
 function startHost(file) {
-  store('name', getName());
+  if ($('#name').value.trim()) store('name', getName());
   host.active = true;
   show('host');
   startUsageMeter('#hostUsage');
@@ -998,7 +998,7 @@ async function openRoom(attempt = 0) {
       // Identificativo fisso del dispositivo: resta uguale anche se l'ospite chiude e riapre
       const cid = /^[a-z0-9]{6,32}$/.test(String(meta.cid || '')) ? meta.cid : conn.peer;
       for (const [oid, og] of [...host.guests]) if (og.cid === cid && oid !== conn.peer) dropGuest(oid, true);
-      host.guests.set(conn.peer, { conn, name, cid, call: null });
+      host.guests.set(conn.peer, { conn, name, cid, call: null, lastSeen: Date.now() });
       const hasControl = host.control === cid;
       if (hasControl) { host.controlName = name; saveControl(); }
       addMsg('#hostLog', null, name + (hasControl ? ' è rientrato: i comandi sono ancora suoi.' : ' è entrato.'));
@@ -1081,8 +1081,24 @@ function press(index, value) {
 }
 function releaseAll() { for (const i of Object.values(BTN)) press(i, 0); }
 
+// Controllo di presenza: WebRTC non sempre segnala la chiusura di una scheda
+const HEARTBEAT_MS = 5000;
+const TIMEOUT_MS = 15000;
+setInterval(() => {
+  if (!host.active) return;
+  broadcast({ t: 'ping' });
+  for (const [id, g] of [...host.guests]) {
+    if (Date.now() - g.lastSeen > TIMEOUT_MS) {
+      try { g.conn.close(); } catch (_) { /* ignora */ }
+      dropGuest(id);
+    }
+  }
+}, HEARTBEAT_MS);
+
 function onGuestData(id, d) {
   if (!d || typeof d !== 'object') return;
+  const g = host.guests.get(id);
+  if (g) g.lastSeen = Date.now();
   const cid = cidOf(id);
   switch (d.t) {
     case 'key':
@@ -1217,21 +1233,33 @@ async function startGuest(rawCode) {
       if (guest.conn !== conn) return;
       stage = 'ok';
       guest.connected = true;
+      guest.lastSeen = Date.now();
       clearInterval(watchdog);
       diag('Passo 3/3: collegato al PC dell\'host ✓');
       setStatus('guest', 'Connesso! Aspetto la diretta…');
     });
     conn.on('error', (e) => diag('Errore del collegamento: ' + (e.type || e.message || e)));
-    conn.on('data', onHostData);
-    conn.on('close', () => {
-      if (guest.conn !== conn) return;
-      guest.live = false;
-      guest.connected = false;
-      setGuestControl(false);
-      setStatus('guest', 'L\'host si è scollegato: aspetto che torni…');
-      scheduleRetry();
-    });
+    conn.on('data', (d) => { guest.lastSeen = Date.now(); onHostData(d); });
+    conn.on('close', () => { if (guest.conn === conn) lostHost('L\'host si è scollegato: aspetto che torni…'); });
   };
+
+  const lostHost = (msg) => {
+    const c = guest.conn;
+    guest.conn = null;
+    if (c) { try { c.close(); } catch (_) { /* ignora */ } }
+    guest.live = false;
+    guest.connected = false;
+    setGuestControl(false);
+    setStatus('guest', msg);
+    scheduleRetry();
+  };
+
+  // Controllo di presenza verso l'host
+  setInterval(() => {
+    if (!guest.connected) return;
+    send({ t: 'ping' });
+    if (Date.now() - guest.lastSeen > 15000) lostHost('L\'host non risponde: riprovo…');
+  }, 5000);
 
   peer.on('open', () => {
     stage = 'room';
