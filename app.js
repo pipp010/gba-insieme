@@ -685,10 +685,33 @@ function startGuest(rawCode) {
   const peer = new Peer();
   guest.peer = peer;
 
+  // Diagnostica: mostra a che punto si ferma il collegamento
+  const diag = (t) => { $('#guestDiag').hidden = false; $('#guestDiag').textContent = t; };
+  let stage = 'server';
+  diag('Passo 1/3: contatto il server di collegamento…');
+  const watchdog = setInterval(() => {
+    const pc = guest.conn && guest.conn.peerConnection;
+    const ice = pc ? pc.iceConnectionState : '-';
+    if (stage === 'server') diag('Passo 1/3: non riesco a raggiungere il server di collegamento. Controlla la connessione internet del telefono.');
+    else if (stage === 'room') diag('Passo 2/3: server raggiunto, cerco la stanza… (stato: ' + ice + ')');
+    if (stage === 'room' && (ice === 'failed' || ice === 'disconnected')) {
+      diag('Passo 3/3 fallito: il collegamento diretto con il PC non riesce (stato: ' + ice + '). '
+        + 'Spesso succede con la rete dati del telefono: prova col Wi-Fi.');
+    }
+  }, 4000);
+
   peer.on('open', () => {
+    stage = 'room';
+    diag('Passo 2/3: server raggiunto, cerco la stanza…');
     const conn = peer.connect(PREFIX + code, { reliable: true, metadata: { name: getName() } });
     guest.conn = conn;
-    conn.on('open', () => setStatus('guest', 'Connesso! Aspetto che l\'host avvii il gioco…'));
+    conn.on('open', () => {
+      stage = 'ok';
+      clearInterval(watchdog);
+      diag('Passo 3/3: collegato al PC dell\'host ✓');
+      setStatus('guest', 'Connesso! Aspetto che l\'host avvii il gioco…');
+    });
+    conn.on('error', (e) => diag('Errore del collegamento: ' + (e.type || e.message || e)));
     conn.on('data', onHostData);
     conn.on('close', () => {
       setGuestControl(false);
