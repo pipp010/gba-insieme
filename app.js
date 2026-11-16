@@ -1128,10 +1128,8 @@ initLibrary();
 initTurnSettings();
 
 const invited = new URLSearchParams(location.search).get('stanza');
-if (invited) {
-  $('#libCard').hidden = true;
-  $('#joinCode').value = invited.toUpperCase();
-  $('#joinCard').classList.add('focus');
-  $('#joinText').textContent = 'Sei stato invitato nella stanza ' + invited.toUpperCase() + '. Scrivi il tuo nome e premi Entra.';
-  $('#name').focus();
+if (invited && extractCode(invited)) {
+  // Aperto da un link d'invito: entro subito nella stanza, senza premere "Entra"
+  if (!$('#name').value.trim()) $('#name').value = 'Ospite';
+  startGuest(invited);
 }
