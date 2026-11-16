@@ -126,6 +126,12 @@ function startHost(file) {
   };
   $('#takeBack').onclick = () => setControl('host');
 
+  loadControl();
+  updateControlState();
+  if (host.control !== 'host') {
+    addMsg('#hostLog', null, 'I comandi sono ancora di ' + nameOfCid(host.control) + ': premi "Riprendi i comandi" per giocare tu.');
+  }
+
   openRoom();
 }
 
@@ -987,12 +993,19 @@ async function openRoom(attempt = 0) {
 
   peer.on('connection', (conn) => {
     conn.on('open', () => {
-      const name = String((conn.metadata && conn.metadata.name) || 'Ospite').slice(0, 24);
-      host.guests.set(conn.peer, { conn, name, call: null });
-      addMsg('#hostLog', null, name + ' è entrato.');
+      const meta = conn.metadata || {};
+      const name = String(meta.name || 'Ospite').slice(0, 24);
+      // Identificativo fisso del dispositivo: resta uguale anche se l'ospite chiude e riapre
+      const cid = /^[a-z0-9]{6,32}$/.test(String(meta.cid || '')) ? meta.cid : conn.peer;
+      for (const [oid, og] of [...host.guests]) if (og.cid === cid && oid !== conn.peer) dropGuest(oid, true);
+      host.guests.set(conn.peer, { conn, name, cid, call: null });
+      const hasControl = host.control === cid;
+      if (hasControl) { host.controlName = name; saveControl(); }
+      addMsg('#hostLog', null, name + (hasControl ? ' è rientrato: i comandi sono ancora suoi.' : ' è entrato.'));
       sendTo(conn, { t: 'control', who: host.control });
       callGuest(conn.peer);
       renderGuests();
+      updateControlState();
     });
     conn.on('data', (d) => onGuestData(conn.peer, d));
     conn.on('close', () => dropGuest(conn.peer));
@@ -1014,15 +1027,47 @@ async function openRoom(attempt = 0) {
 }
 
 function guestName(id) { const g = host.guests.get(id); return g ? g.name : 'Ospite'; }
+function cidOf(id) { const g = host.guests.get(id); return g ? g.cid : null; }
+function nameOfCid(cid) {
+  for (const g of host.guests.values()) if (g.cid === cid) return g.name;
+  return host.controlName || 'Ospite';
+}
+function controllerOnline() {
+  for (const g of host.guests.values()) if (g.cid === host.control) return true;
+  return false;
+}
 
-function dropGuest(id) {
+// Chi ha i comandi resta memorizzato anche se l'host ricarica la pagina
+function saveControl() { store('control', JSON.stringify({ who: host.control, name: host.controlName || null })); }
+function loadControl() {
+  try {
+    const c = JSON.parse(load('control') || 'null');
+    if (c && typeof c.who === 'string') { host.control = c.who; host.controlName = c.name; }
+  } catch (_) { /* ignora */ }
+}
+
+function dropGuest(id, quiet) {
   const g = host.guests.get(id);
   if (!g) return;
   if (g.call) { try { g.call.close(); } catch (_) { /* ignora */ } }
   host.guests.delete(id);
-  addMsg('#hostLog', null, g.name + ' è uscito.');
-  if (host.control === id) setControl('host');
+  if (!quiet) {
+    addMsg('#hostLog', null, host.control === g.cid
+      ? g.name + ' è uscito: i comandi restano suoi finché non li riprendi.'
+      : g.name + ' è uscito.');
+  }
   renderGuests();
+  updateControlState();
+}
+
+function updateControlState() {
+  if (host.control === 'host') {
+    $('#controlState').textContent = '🎮 I comandi sono tuoi';
+  } else {
+    $('#controlState').textContent = '👉 Comanda ' + nameOfCid(host.control)
+      + (controllerOnline() ? '' : ' (non collegato)');
+  }
+  $('#takeBack').hidden = host.control === 'host';
 }
 
 function sendTo(conn, msg) { if (conn && conn.open) conn.send(msg); }
@@ -1038,9 +1083,10 @@ function releaseAll() { for (const i of Object.values(BTN)) press(i, 0); }
 
 function onGuestData(id, d) {
   if (!d || typeof d !== 'object') return;
+  const cid = cidOf(id);
   switch (d.t) {
     case 'key':
-      if (host.control === id && Object.prototype.hasOwnProperty.call(BTN, d.b)) press(BTN[d.b], d.d ? 1 : 0);
+      if (cid && host.control === cid && Object.prototype.hasOwnProperty.call(BTN, d.b)) press(BTN[d.b], d.d ? 1 : 0);
       break;
     case 'chat': {
       const text = String(d.text || '').slice(0, 500);
@@ -1053,28 +1099,25 @@ function onGuestData(id, d) {
       const btn = document.createElement('button');
       btn.className = 'btn mini primary';
       btn.textContent = 'Dai i comandi';
-      btn.onclick = () => { setControl(id); btn.remove(); };
+      btn.onclick = () => { if (cid) setControl(cid); btn.remove(); };
       addMsg('#hostLog', null, guestName(id) + ' chiede i comandi.', btn);
       break;
     }
     case 'giveback':
-      if (host.control === id) setControl('host');
+      if (cid && host.control === cid) setControl('host');
       break;
   }
 }
 
+// who: 'host' oppure l'identificativo fisso del dispositivo dell'ospite
 function setControl(who) {
   releaseAll();
   host.control = who;
+  host.controlName = who === 'host' ? null : nameOfCid(who);
+  saveControl();
   broadcast({ t: 'control', who });
-  if (who === 'host') {
-    $('#controlState').textContent = '🎮 I comandi sono tuoi';
-    addMsg('#hostLog', null, 'Hai ripreso i comandi.');
-  } else {
-    $('#controlState').textContent = '👉 Comanda ' + guestName(who);
-    addMsg('#hostLog', null, 'Comandi passati a ' + guestName(who) + '.');
-  }
-  $('#takeBack').hidden = who === 'host';
+  addMsg('#hostLog', null, who === 'host' ? 'Hai ripreso i comandi.' : 'Comandi passati a ' + host.controlName + '.');
+  updateControlState();
   renderGuests();
 }
 
@@ -1093,7 +1136,7 @@ function renderGuests() {
     const span = document.createElement('span');
     span.textContent = g.name;
     li.append(span);
-    if (host.control === id) {
+    if (host.control === g.cid) {
       const s = document.createElement('span');
       s.textContent = '🎮 comanda';
       li.append(s);
@@ -1101,7 +1144,7 @@ function renderGuests() {
       const b = document.createElement('button');
       b.className = 'btn mini';
       b.textContent = 'Dai i comandi';
-      b.onclick = () => setControl(id);
+      b.onclick = () => setControl(g.cid);
       li.append(b);
     }
     ul.append(li);
@@ -1122,6 +1165,9 @@ async function startGuest(rawCode) {
   const code = extractCode(rawCode);
   if (!code) return;
   store('name', getName());
+  // Identificativo fisso di questo dispositivo, per ritrovare i comandi dopo una chiusura
+  guest.cid = load('client-id');
+  if (!guest.cid || !/^[a-z0-9]{6,32}$/.test(guest.cid)) { guest.cid = randomCode() + randomCode(); store('client-id', guest.cid); }
   guest.active = true;
   document.body.classList.add('mode-guest');
   show('guest');
@@ -1165,7 +1211,7 @@ async function startGuest(rawCode) {
 
   const connectToRoom = () => {
     if (guest.conn) { try { guest.conn.close(); } catch (_) { /* ignora */ } }
-    const conn = peer.connect(PREFIX + code, { reliable: true, metadata: { name: getName() } });
+    const conn = peer.connect(PREFIX + code, { reliable: true, metadata: { name: getName(), cid: guest.cid } });
     guest.conn = conn;
     conn.on('open', () => {
       if (guest.conn !== conn) return;
@@ -1256,7 +1302,7 @@ function send(msg) { if (guest.conn && guest.conn.open) guest.conn.send(msg); }
 function onHostData(d) {
   if (!d || typeof d !== 'object') return;
   if (d.t === 'control') {
-    const mine = d.who === guest.peer.id;
+    const mine = d.who === guest.cid;
     if (mine !== guest.hasControl) {
       addMsg('#guestLog', null, mine ? 'Hai i comandi! 🎮' : 'I comandi sono passati a un altro giocatore.');
     }
