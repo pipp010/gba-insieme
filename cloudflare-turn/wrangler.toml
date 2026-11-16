@@ -1,0 +1,3 @@
+name = "sparkling-cherry-61ae"
+main = "worker.js"
+compatibility_date = "2025-10-01"

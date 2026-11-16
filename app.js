@@ -546,16 +546,17 @@ async function fetchTurnServers(url) {
   return list;
 }
 
-async function peerOptions() {
-  const url = load('turn-url');
+// Ripetitore di Cloudflare (credenziali temporanee generate dal worker in cloudflare-turn/)
+const TURN_URL = 'https://sparkling-cherry-61ae.filippo-melara.workers.dev';
+
+async function peerOptions(logSel) {
+  const url = load('turn-url') || TURN_URL;
   const iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
   if (url) {
     try {
       iceServers.push(...await fetchTurnServers(url));
-      host.turn = true;
     } catch (e) {
-      host.turn = false;
-      addMsg('#hostLog', null, '⚠ Ripetitore non disponibile (' + e.message + '): l\'amico potrebbe non riuscire a collegarsi.');
+      addMsg(logSel, null, '⚠ Ripetitore non disponibile (' + e.message + '): il collegamento potrebbe non riuscire.');
     }
   }
   return { config: { iceServers } };
@@ -588,7 +589,7 @@ function initTurnSettings() {
 
 async function openRoom() {
   const code = randomCode();
-  const peer = new Peer(PREFIX + code, await peerOptions());
+  const peer = new Peer(PREFIX + code, await peerOptions('#hostLog'));
   host.peer = peer;
 
   peer.on('open', () => {
@@ -725,7 +726,7 @@ function renderGuests() {
 // ===================================================================
 const guest = { peer: null, conn: null, hasControl: false, pressed: new Set(), active: false };
 
-function startGuest(rawCode) {
+async function startGuest(rawCode) {
   const code = extractCode(rawCode);
   if (!code) return;
   store('name', getName());
@@ -734,7 +735,7 @@ function startGuest(rawCode) {
   history.replaceState(null, '', location.pathname + '?stanza=' + code);
   setStatus('guest', 'Mi collego alla stanza ' + code.toUpperCase() + '…');
 
-  const peer = new Peer();
+  const peer = new Peer(await peerOptions('#guestLog'));
   guest.peer = peer;
 
   // Diagnostica: mostra a che punto si ferma il collegamento
