@@ -7,3 +7,6 @@
 *.sav
 *.srm
 _test/
+
+# Cache e configurazioni locali di Cloudflare
+.wrangler/
