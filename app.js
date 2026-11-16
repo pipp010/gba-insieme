@@ -534,9 +534,61 @@ function callGuest(id) {
   g.call = host.peer.call(id, stream);
 }
 
-function openRoom() {
+// ===== Ripetitore TURN =====
+// I ripetitori predefiniti di PeerJS non esistono più: senza uno nostro, PC e telefono
+// spesso non riescono a collegarsi. Le credenziali le fornisce Metered (Open Relay).
+async function fetchTurnServers(url) {
+  const res = await fetch(url, { cache: 'no-store' });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  const j = await res.json();
+  const list = Array.isArray(j) ? j : j.iceServers;
+  if (!Array.isArray(list) || !list.length) throw new Error('risposta non valida');
+  return list;
+}
+
+async function peerOptions() {
+  const url = load('turn-url');
+  const iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
+  if (url) {
+    try {
+      iceServers.push(...await fetchTurnServers(url));
+      host.turn = true;
+    } catch (e) {
+      host.turn = false;
+      addMsg('#hostLog', null, '⚠ Ripetitore non disponibile (' + e.message + '): l\'amico potrebbe non riuscire a collegarsi.');
+    }
+  }
+  return { config: { iceServers } };
+}
+
+function initTurnSettings() {
+  const info = $('#turnInfo');
+  if (load('turn-url')) { info.textContent = '✓ Ripetitore configurato.'; $('#turnBox').open = false; }
+  $('#turnForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const url = $('#turnUrl').value.trim();
+    if (!/^https:\/\//i.test(url)) { info.textContent = 'L\'indirizzo deve iniziare con https://'; return; }
+    info.textContent = 'Provo il ripetitore…';
+    try {
+      const list = await fetchTurnServers(url);
+      const ok = list.some((s) => [].concat(s.urls || s.url || []).some((u) => /^turns?:/i.test(u)));
+      if (!ok) throw new Error('nessun server TURN nella risposta');
+      store('turn-url', url);
+      $('#turnUrl').value = '';
+      info.textContent = '✓ Ripetitore salvato e funzionante.';
+    } catch (err) {
+      info.textContent = '⚠ Non funziona (' + err.message + '). Controlla l\'indirizzo.';
+    }
+  });
+  $('#turnClear').onclick = () => {
+    try { localStorage.removeItem('turn-url'); } catch (_) { /* ignora */ }
+    info.textContent = 'Ripetitore rimosso.';
+  };
+}
+
+async function openRoom() {
   const code = randomCode();
-  const peer = new Peer(PREFIX + code);
+  const peer = new Peer(PREFIX + code, await peerOptions());
   host.peer = peer;
 
   peer.on('open', () => {
@@ -866,6 +918,7 @@ $('#joinForm').addEventListener('submit', (e) => {
 });
 
 initLibrary();
+initTurnSettings();
 
 const invited = new URLSearchParams(location.search).get('stanza');
 if (invited) {

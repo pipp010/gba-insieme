@@ -46,6 +46,18 @@
         <label class="btn primary">Scegli il gioco…
           <input type="file" id="romFile" accept=".gba,.gb,.gbc,.zip,.7z" hidden>
         </label>
+        <details id="turnBox" class="settings">
+          <summary>Ripetitore (se l'amico non riesce a collegarsi)</summary>
+          <p>Incolla l'indirizzo delle credenziali di Metered (inizia con <code>https://</code> e finisce con <code>apiKey=…</code>).</p>
+          <form id="turnForm" class="stack">
+            <input id="turnUrl" type="password" placeholder="https://….metered.live/api/v1/turn/credentials?apiKey=…" autocomplete="off" spellcheck="false">
+            <div class="row">
+              <button class="btn grow">Salva e prova</button>
+              <button id="turnClear" class="btn" type="button">Rimuovi</button>
+            </div>
+          </form>
+          <p id="turnInfo" class="hint"></p>
+        </details>
       </div>
       <div class="card" id="joinCard">
         <h2>Entra in una stanza</h2>
