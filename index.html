@@ -21,6 +21,25 @@
     </label>
 
     <div class="cards">
+      <div class="card" id="libCard">
+        <h2>I tuoi giochi su GitHub</h2>
+        <div id="ghSetup">
+          <p>Collega il tuo archivio privato: i giochi della cartella <code>rom</code> compariranno qui e i salvataggi si sincronizzeranno da soli.</p>
+          <form id="ghForm" class="stack">
+            <input id="ghRepo" placeholder="utente/gba-privato" autocomplete="off" spellcheck="false">
+            <input id="ghToken" type="password" placeholder="Chiave (token) GitHub" autocomplete="off">
+            <button class="btn primary">Collega</button>
+          </form>
+          <p id="ghError" class="hint"></p>
+        </div>
+        <div id="ghLib" hidden>
+          <ul id="romList" class="roms"></ul>
+          <div class="row">
+            <button id="ghRefresh" class="btn grow" type="button">Aggiorna elenco</button>
+            <button id="ghLogout" class="btn" type="button">Scollega</button>
+          </div>
+        </div>
+      </div>
       <div class="card" id="hostCard">
         <h2>Gioca e trasmetti</h2>
         <p>Scegli il file del gioco (.gba) dal tuo computer. Il file resta sul tuo PC: non viene caricato da nessuna parte.</p>
@@ -69,6 +88,7 @@
         </label>
       </div>
       <p id="saveInfo" class="hint">Il salvataggio del gioco viene copiato nel browser ogni 15 secondi.</p>
+      <p id="cloudInfo" class="hint" hidden></p>
 
       <div class="label">Spettatori</div>
       <ul id="guestList" class="guests"><li class="empty">Nessuno per ora</li></ul>

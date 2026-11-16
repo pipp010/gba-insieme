@@ -214,15 +214,20 @@ function isBlank(bytes) { return !bytes || bytes.every((x) => x === 0xff) || byt
 function timeStr(t) { return new Date(t).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }); }
 
 async function backupToBrowser() {
+  if (saves.cloudDirty && saves.last && !isBlank(saves.last)) {
+    saves.cloudDirty = false;
+    queueUpload(saves.last);
+  }
   const data = await readSave();
   if (!data || isBlank(data) || sameBytes(data, saves.last)) return;
   const time = Date.now();
+  saves.last = data;
   if (await saveDB.set(saveKey(), { data, time })) {
-    saves.last = data;
     $('#saveInfo').textContent = 'Copia nel browser aggiornata alle ' + timeStr(time) + '.';
   } else {
     $('#saveInfo').textContent = '⚠ Il browser non permette di salvare: usa "Scarica .sav".';
   }
+  queueUpload(data);
 }
 
 async function setupSaves() {
@@ -231,19 +236,21 @@ async function setupSaves() {
   $('#saveUpLabel').classList.remove('disabled');
 
   // Se l'emulatore non ha trovato un salvataggio ma noi ne abbiamo una copia, la ripristiniamo
-  const current = await readSave();
+  let current = await readSave();
   const backup = await saveDB.get(saveKey());
   if (backup && isBlank(current)) {
     try {
       writeSave(backup.data);
       restartGame();
-      saves.last = backup.data;
+      current = backup.data;
       addMsg('#hostLog', null, 'Salvataggio ripristinato dalla copia del ' + new Date(backup.time).toLocaleString('it-IT') + '.');
     } catch (_) { /* ignora */ }
-  } else {
-    saves.last = current;
   }
+  saves.last = current;
   if (backup) $('#saveInfo').textContent = 'Ultima copia nel browser: ' + new Date(backup.time).toLocaleString('it-IT') + '.';
+
+  // Confronto con il salvataggio su GitHub (se l'archivio è collegato)
+  if (gh.cfg) await initialCloudSync(current);
 
   saves.timer = setInterval(backupToBrowser, 15000);
   document.addEventListener('visibilitychange', () => { if (document.hidden) backupToBrowser(); });
@@ -277,6 +284,7 @@ async function setupSaves() {
       await saveDB.set(saveKey(), { data, time: Date.now() });
       saves.last = data;
       $('#saveInfo').textContent = 'Salvataggio "' + file.name + '" caricato.';
+      queueUpload(data);
     } catch (err) {
       $('#saveInfo').textContent = '⚠ Non sono riuscito a caricare il file.';
     }
@@ -286,6 +294,227 @@ async function setupSaves() {
 function restartGame() {
   const g = gm();
   if (g && typeof g.restart === 'function') g.restart();
+}
+
+// ===================================================================
+// Archivio privato su GitHub: giochi (rom/) e salvataggi (salvataggi/)
+// ===================================================================
+const gh = {
+  cfg: null,
+  load() {
+    try { this.cfg = JSON.parse(load('gh-config') || 'null'); } catch (_) { this.cfg = null; }
+    return this.cfg;
+  },
+  save() { store('gh-config', JSON.stringify(this.cfg)); },
+  clear() { this.cfg = null; try { localStorage.removeItem('gh-config'); } catch (_) { /* ignora */ } },
+  api(path, { accept, method = 'GET', body } = {}) {
+    const headers = {
+      Authorization: 'Bearer ' + this.cfg.token,
+      Accept: accept || 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+    };
+    if (body) headers['Content-Type'] = 'application/json';
+    return fetch('https://api.github.com/repos/' + this.cfg.repo + path, {
+      method, headers, body: body ? JSON.stringify(body) : undefined, cache: 'no-store',
+    });
+  },
+  savePath(name) { return '/contents/salvataggi/' + encodeURIComponent(name + '.sav'); },
+  async getSave(name) {
+    const res = await this.api(this.savePath(name));
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const j = await res.json();
+    return { sha: j.sha, data: fromB64(j.content || '') };
+  },
+  putSave(name, data, sha) {
+    return this.api(this.savePath(name), {
+      method: 'PUT',
+      body: { message: 'Salvataggio ' + name, content: toB64(data), ...(sha ? { sha } : {}) },
+    });
+  },
+};
+
+function toB64(bytes) {
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+function fromB64(b64) {
+  const s = atob(b64.replace(/\s/g, ''));
+  const out = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+  return out;
+}
+function hashBytes(b) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < b.length; i++) { h ^= b[i]; h = Math.imul(h, 0x01000193); }
+  return (h >>> 0).toString(16) + ':' + b.length;
+}
+const syncKey = () => 'sync:' + window.EJS_gameName;
+function setCloud(text) { const el = $('#cloudInfo'); el.hidden = false; el.textContent = text; }
+
+async function initialCloudSync(local) {
+  const name = window.EJS_gameName;
+  setCloud('☁ Controllo il salvataggio su GitHub…');
+  let remote;
+  try { remote = await gh.getSave(name); } catch (e) {
+    setCloud('⚠ GitHub non raggiungibile (' + e.message + '). Il gioco salva comunque nel browser.');
+    saves.cloudDirty = true;
+    return;
+  }
+  const localBlank = isBlank(local);
+  if (!remote) {
+    if (!localBlank) await uploadSave(local);
+    else setCloud('☁ Nessun salvataggio su GitHub per ora: verrà caricato al primo salvataggio.');
+    return;
+  }
+  const rh = hashBytes(remote.data);
+  if (!localBlank && hashBytes(local) === rh) {
+    await saveDB.set(syncKey(), { sha: remote.sha, hash: rh });
+    setCloud('☁ Salvataggio allineato con GitHub.');
+    return;
+  }
+  const state = (await saveDB.get(syncKey())) || {};
+  const remoteChanged = remote.sha !== state.sha;
+  const localChanged = !localBlank && hashBytes(local) !== state.hash;
+  let useRemote;
+  if (localBlank || (remoteChanged && !localChanged)) useRemote = true;
+  else if (!remoteChanged && localChanged) useRemote = false;
+  else {
+    useRemote = window.confirm(
+      'Il salvataggio su GitHub è diverso da quello di questo browser.\n\n'
+      + 'OK = usa quello su GitHub\nAnnulla = tieni quello di questo browser (e aggiorna GitHub)');
+  }
+  if (useRemote) {
+    try {
+      writeSave(remote.data);
+      restartGame();
+      saves.last = remote.data;
+      await saveDB.set(saveKey(), { data: remote.data, time: Date.now() });
+      await saveDB.set(syncKey(), { sha: remote.sha, hash: rh });
+      setCloud('☁ Salvataggio scaricato da GitHub.');
+      addMsg('#hostLog', null, 'Salvataggio caricato da GitHub.');
+    } catch (_) {
+      setCloud('⚠ Non sono riuscito ad applicare il salvataggio di GitHub.');
+    }
+  } else {
+    await uploadSave(local);
+  }
+}
+
+async function uploadSave(data) {
+  if (!gh.cfg) return;
+  const name = window.EJS_gameName;
+  try {
+    const state = (await saveDB.get(syncKey())) || {};
+    let res = await gh.putSave(name, data, state.sha);
+    if (res.status === 409 || res.status === 422) {
+      // Il file su GitHub è cambiato: prendo il riferimento aggiornato e riprovo
+      const r = await gh.getSave(name);
+      res = await gh.putSave(name, data, r && r.sha);
+    }
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const j = await res.json();
+    await saveDB.set(syncKey(), { sha: j.content.sha, hash: hashBytes(data) });
+    setCloud('☁ Salvato su GitHub alle ' + timeStr(Date.now()) + '.');
+  } catch (e) {
+    saves.cloudDirty = true;
+    setCloud('⚠ Invio a GitHub non riuscito (' + e.message + '). Riprovo tra poco.');
+  }
+}
+
+saves.queue = Promise.resolve();
+function queueUpload(data) {
+  if (!gh.cfg) return;
+  saves.queue = saves.queue.then(() => uploadSave(data));
+}
+
+// ----- Libreria nella pagina iniziale -----
+function libFail(msg) {
+  $('#ghSetup').hidden = false;
+  $('#ghLib').hidden = true;
+  $('#ghError').textContent = msg;
+  return false;
+}
+
+async function refreshRoms() {
+  $('#ghError').textContent = '';
+  const list = $('#romList');
+  let res;
+  try { res = await gh.api('/contents/rom'); } catch (_) { return libFail('GitHub non raggiungibile.'); }
+  if (res.status === 401) return libFail('Chiave non valida o scaduta.');
+  let items = [];
+  if (res.status === 404) {
+    const repo = await gh.api('');
+    if (!repo.ok) return libFail('Non trovo il repository, o la chiave non ha accesso.');
+  } else if (!res.ok) {
+    return libFail('Errore GitHub (' + res.status + ').');
+  } else {
+    items = (await res.json()).filter((i) => i.type === 'file' && /\.(gba|gb|gbc|zip|7z)$/i.test(i.name));
+  }
+
+  $('#ghSetup').hidden = true;
+  $('#ghLib').hidden = false;
+  list.textContent = '';
+  if (!items.length) {
+    const li = document.createElement('li');
+    li.className = 'empty';
+    li.textContent = 'La cartella rom è vuota. Aggiungi un gioco e sincronizza.';
+    list.append(li);
+  }
+  for (const item of items) {
+    const li = document.createElement('li');
+    const b = document.createElement('button');
+    b.className = 'btn';
+    b.type = 'button';
+    const title = document.createElement('span');
+    title.textContent = item.name.replace(/\.[^.]+$/, '');
+    const size = document.createElement('span');
+    size.className = 'size';
+    size.textContent = (item.size / 1048576).toFixed(1) + ' MB';
+    b.append(title, size);
+    b.onclick = () => loadRomFromGitHub(item, b, size);
+    li.append(b);
+    list.append(li);
+  }
+  return true;
+}
+
+async function loadRomFromGitHub(item, btn, label) {
+  btn.disabled = true;
+  label.textContent = 'Scarico…';
+  try {
+    const path = item.path.split('/').map(encodeURIComponent).join('/');
+    const res = await gh.api('/contents/' + path, { accept: 'application/vnd.github.raw' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const blob = await res.blob();
+    startHost(new File([blob], item.name));
+  } catch (e) {
+    btn.disabled = false;
+    label.textContent = 'Errore, riprova';
+    $('#ghError').textContent = 'Download non riuscito (' + e.message + ').';
+  }
+}
+
+function initLibrary() {
+  const owner = location.hostname.endsWith('.github.io') ? location.hostname.split('.')[0] : '';
+  if (owner) $('#ghRepo').value = owner + '/gba-privato';
+
+  $('#ghForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const repo = $('#ghRepo').value.trim().replace(/^https?:\/\/github\.com\//i, '').replace(/\/+$/, '');
+    const token = $('#ghToken').value.trim();
+    if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !token) { libFail('Inserisci repository e chiave.'); return; }
+    gh.cfg = { repo, token };
+    $('#ghError').textContent = 'Collego…';
+    if (await refreshRoms()) { gh.save(); $('#ghToken').value = ''; } else gh.cfg = null;
+  });
+  $('#ghRefresh').onclick = () => refreshRoms();
+  $('#ghLogout').onclick = () => { gh.clear(); libFail(''); };
+
+  if (gh.load()) {
+    refreshRoms().then((ok) => { if (!ok) gh.cfg = null; });
+  }
 }
 
 // Se l'audio parte dopo il video, ritrasmetto per includerlo
@@ -613,8 +842,11 @@ $('#joinForm').addEventListener('submit', (e) => {
   else $('#joinCode').focus();
 });
 
+initLibrary();
+
 const invited = new URLSearchParams(location.search).get('stanza');
 if (invited) {
+  $('#libCard').hidden = true;
   $('#joinCode').value = invited.toUpperCase();
   $('#joinCard').classList.add('focus');
   $('#joinText').textContent = 'Sei stato invitato nella stanza ' + invited.toUpperCase() + '. Scrivi il tuo nome e premi Entra.';
