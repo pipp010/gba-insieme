@@ -72,6 +72,8 @@ input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 code { background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
 .roms { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow-y: auto; }
 .roms .btn { width: 100%; justify-content: space-between; gap: 10px; white-space: normal; text-align: left; }
+.roms .sub { display: block; font-weight: 400; font-size: .8rem; color: var(--muted); margin-top: 2px; }
+.roms .btn:hover .sub { color: var(--text); }
 .roms .size { color: var(--muted); font-weight: 400; font-size: .85rem; white-space: nowrap; }
 .roms .empty { color: var(--muted); }
 

@@ -480,7 +480,15 @@ async function refreshRoms() {
     b.className = 'btn';
     b.type = 'button';
     const title = document.createElement('span');
-    title.textContent = item.name.replace(/\.[^.]+$/, '');
+    const gameName = item.name.replace(/\.[^.]+$/, '');
+    title.textContent = gameName;
+    const sub = document.createElement('small');
+    sub.className = 'sub';
+    sub.textContent = 'Controllo la sessione…';
+    title.append(sub);
+    sessionDate(gameName).then((d) => {
+      sub.textContent = d ? '⏯ Riprende dalla sessione del ' + d : 'Nessuna sessione: parte dal salvataggio del gioco';
+    });
     const size = document.createElement('span');
     size.className = 'size';
     size.textContent = (item.size / 1048576).toFixed(1) + ' MB';
@@ -521,7 +529,7 @@ async function loadRomFromGitHub(item, btn, label) {
 // Sessioni: il punto esatto della partita, salvato su GitHub (sessioni/<gioco>.state.gz)
 // ===================================================================
 const session = { sha: null, lastHash: null, busy: false, timer: null };
-const SESSION_EVERY_MIN = 10;
+const SESSION_EVERY_MIN = 2;
 const sessionPath = () => '/contents/sessioni/' + encodeURIComponent(window.EJS_gameName + '.state.gz');
 function setSession(text) { const el = $('#sessionInfo'); el.hidden = false; el.textContent = text; }
 
@@ -541,16 +549,50 @@ async function readState() {
   return st && st.length ? new Uint8Array(st) : null;
 }
 
+// Istantanea compressa tenuta pronta in memoria: serve per salvare anche quando la pagina si chiude
+async function snapshot() {
+  const state = await readState();
+  if (!state) return null;
+  const hash = hashBytes(state);
+  if (session.snap && session.snap.hash === hash) return session.snap;
+  session.snap = { hash, content: toB64(await gzip(state)), time: Date.now() };
+  return session.snap;
+}
+
+// Invio immediato alla chiusura della pagina: usa l'istantanea più recente (al massimo di 15 secondi prima)
+function flushSessionNow() {
+  const snap = session.snap;
+  if (!gh.cfg || !snap || snap.hash === session.lastHash) return;
+  try {
+    fetch('https://api.github.com/repos/' + gh.cfg.repo + sessionPath(), {
+      method: 'PUT',
+      keepalive: true,
+      headers: {
+        Authorization: 'Bearer ' + gh.cfg.token,
+        Accept: 'application/vnd.github+json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        message: 'Sessione ' + window.EJS_gameName + ' (chiusura)',
+        content: snap.content,
+        ...(session.sha ? { sha: session.sha } : {}),
+      }),
+    }).catch(() => {});
+    session.lastHash = snap.hash;
+    session.sha = null; // cambierà: al prossimo invio lo rileggo
+  } catch (_) { /* troppo grande per l'invio alla chiusura */ }
+}
+
 async function saveSession(reason) {
   if (!gh.cfg || session.busy) return;
   session.busy = true;
   try {
-    const state = await readState();
-    if (!state) throw new Error('stato non disponibile');
-    const h = hashBytes(state);
-    if (h === session.lastHash && reason === 'auto') return;
+    const snap = await snapshot();
+    if (!snap) throw new Error('stato non disponibile');
+    const h = snap.hash;
+    if (h === session.lastHash && reason !== 'manuale') return;
     setSession('⏳ Salvo la sessione su GitHub…');
-    const content = toB64(await gzip(state));
+    const content = snap.content;
     const body = (sha) => ({ message: 'Sessione ' + window.EJS_gameName, content, ...(sha ? { sha } : {}) });
     let res = await gh.api(sessionPath(), { method: 'PUT', body: body(session.sha) });
     if (res.status === 409 || res.status === 422) {
@@ -571,7 +613,7 @@ async function saveSession(reason) {
 
 async function resumeSession() {
   const meta = await gh.api(sessionPath());
-  if (meta.status === 404) { setSession('Nessuna sessione salvata per questo gioco: la prima verrà salvata tra ' + SESSION_EVERY_MIN + ' minuti o col pulsante.'); return; }
+  if (meta.status === 404) { setSession('Nessuna sessione salvata: la partita verrà salvata da sola ogni ' + SESSION_EVERY_MIN + ' minuti e alla chiusura.'); return; }
   if (!meta.ok) throw new Error('HTTP ' + meta.status);
   const info = await meta.json();
   session.sha = info.sha;
@@ -585,7 +627,7 @@ async function resumeSession() {
   // Il salvataggio contenuto nella sessione non va trattato come "nuovo salvataggio"
   await new Promise((r) => setTimeout(r, 500));
   saves.last = (await readSave()) || saves.last;
-  setSession('⏯ Sessione ripresa da GitHub.');
+  setSession('⏯ Sessione ripresa da GitHub (salvata il ' + (await sessionDate(window.EJS_gameName) || '?') + ').');
   addMsg('#hostLog', null, 'Partita ripresa dal punto esatto in cui l\'avevi lasciata.');
 }
 
@@ -594,8 +636,26 @@ async function setupSessions() {
   $('#sessionBtn').onclick = () => saveSession('manuale');
   setSession('⏳ Cerco una sessione salvata…');
   try { await resumeSession(); } catch (e) { setSession('⚠ Non sono riuscito a riprendere la sessione (' + e.message + ').'); }
+  session.snapTimer = setInterval(() => { snapshot().catch(() => {}); }, 15000);
   session.timer = setInterval(() => saveSession('auto'), SESSION_EVERY_MIN * 60000);
-  document.addEventListener('visibilitychange', () => { if (document.hidden) saveSession('auto'); });
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) return;
+    flushSessionNow();       // subito, con l'istantanea pronta
+    saveSession('auto');     // poi, se la pagina resta viva, con lo stato aggiornato
+  });
+  window.addEventListener('pagehide', flushSessionNow);
+}
+
+// Data dell'ultima sessione salvata (dalla cronologia del repository)
+async function sessionDate(gameName) {
+  try {
+    const res = await gh.api('/commits?per_page=1&path=' + encodeURIComponent('sessioni/' + gameName + '.state.gz'));
+    if (!res.ok) return null;
+    const list = await res.json();
+    if (!list.length) return null;
+    const d = new Date(list[0].commit.committer.date);
+    return d.toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit' }) + ' alle ' + timeStr(d);
+  } catch (_) { return null; }
 }
 
 // ===================================================================
