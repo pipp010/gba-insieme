@@ -703,7 +703,7 @@ async function saveSlot() {
     const d = new Date();
     const stamp = d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate())
       + '_' + pad2(d.getHours()) + '-' + pad2(d.getMinutes()) + '-' + pad2(d.getSeconds());
-    const label = $('#slotName').value.replace(/[^\p{L}\p{N} _-]/gu, '').trim().slice(0, 30);
+    const label = $('#slotName').value.replace(/[^\p{L}\p{N} _-]/gu, '').replace(/\s+/g, ' ').trim().slice(0, 30);
     const name = stamp + (label ? ' - ' + label : '') + '.state.gz';
     const res = await gh.api('/contents/' + encPath(slotDir() + '/' + name), {
       method: 'PUT',
