@@ -2,9 +2,12 @@
 <html lang="it">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#12111a">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <title>GBA Insieme</title>
-<link rel="stylesheet" href="style.css?v=5">
+<link rel="stylesheet" href="style.css?v=6">
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 </head>
 <body>
@@ -129,6 +132,12 @@
         <button id="unmute" class="btn primary overlay" hidden>🔊 Tocca per attivare l'audio</button>
       </div>
 
+      <!-- Barra compatta, visibile solo su telefono in verticale -->
+      <div class="mobileBar">
+        <span id="mStatus" class="mstatus">Mi collego…</span>
+        <button id="askBtnM" class="btn primary">Chiedi i comandi</button>
+      </div>
+
       <div class="pad" aria-label="Comandi">
         <div class="shoulders"><button data-b="L">L</button><button data-b="R">R</button></div>
         <div class="padRow">
@@ -168,6 +177,6 @@
   </section>
 </main>
 
-<script src="app.js?v=5"></script>
+<script src="app.js?v=6"></script>
 </body>
 </html>

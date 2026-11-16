@@ -43,7 +43,10 @@ function show(id) {
 function store(k, v) { try { localStorage.setItem(k, v); } catch (_) { /* ignora */ } }
 function load(k) { try { return localStorage.getItem(k); } catch (_) { return null; } }
 function getName() { return $('#name').value.trim().slice(0, 24) || 'Anonimo'; }
-function setStatus(who, text) { $('#' + who + 'Status').textContent = text; }
+function setStatus(who, text) {
+  $('#' + who + 'Status').textContent = text;
+  if (who === 'guest') updateMobileBar();
+}
 function randomCode() {
   const a = 'abcdefghjkmnpqrstuvwxyz23456789';
   let s = '';
@@ -900,7 +903,9 @@ async function startGuest(rawCode) {
   if (!code) return;
   store('name', getName());
   guest.active = true;
+  document.body.classList.add('mode-guest');
   show('guest');
+  keepAwake();
   startUsageMeter('#guestUsage');
   history.replaceState(null, '', location.pathname + '?stanza=' + code);
   setStatus('guest', 'Mi collego alla stanza ' + code.toUpperCase() + '…');
@@ -909,7 +914,12 @@ async function startGuest(rawCode) {
   guest.peer = peer;
 
   // Diagnostica: mostra a che punto si ferma il collegamento
-  const diag = (t) => { $('#guestDiag').hidden = false; $('#guestDiag').textContent = t; };
+  const diag = (t) => {
+    $('#guestDiag').hidden = false;
+    $('#guestDiag').textContent = t;
+    guest.diagMsg = stage === 'ok' ? null : t;
+    updateMobileBar();
+  };
   let stage = 'server';
   diag('Passo 1/3: contatto il server di collegamento…');
   const watchdog = setInterval(() => {
@@ -930,6 +940,7 @@ async function startGuest(rawCode) {
     guest.conn = conn;
     conn.on('open', () => {
       stage = 'ok';
+      guest.connected = true;
       clearInterval(watchdog);
       diag('Passo 3/3: collegato al PC dell\'host ✓');
       setStatus('guest', 'Connesso! Aspetto che l\'host avvii il gioco…');
@@ -937,6 +948,8 @@ async function startGuest(rawCode) {
     conn.on('error', (e) => diag('Errore del collegamento: ' + (e.type || e.message || e)));
     conn.on('data', onHostData);
     conn.on('close', () => {
+      guest.live = false;
+      guest.connected = false;
       setGuestControl(false);
       setStatus('guest', 'La stanza è stata chiusa dall\'host.');
     });
@@ -955,6 +968,7 @@ async function startGuest(rawCode) {
         v.play().catch(() => {});
         $('#unmute').hidden = false;
       });
+      guest.live = true;
       setStatus('guest', 'In diretta 🔴');
     });
   });
@@ -980,6 +994,7 @@ async function startGuest(rawCode) {
       addMsg('#guestLog', null, 'Richiesta inviata all\'host.');
     }
   };
+  $('#askBtnM').onclick = () => $('#askBtn').click();
   setupChat('#guestChatForm', (text) => {
     addMsg('#guestLog', getName(), text);
     send({ t: 'chat', text });
@@ -1015,7 +1030,27 @@ function setGuestControl(on) {
   document.body.classList.toggle('has-control', on);
   $('#controlBadge').textContent = on ? '🎮 Hai i comandi!' : '👀 Stai guardando';
   $('#askBtn').textContent = on ? 'Restituisci i comandi' : 'Chiedi i comandi';
+  updateMobileBar();
 }
+
+// Barra compatta per il telefono in verticale
+function updateMobileBar() {
+  const el = $('#mStatus');
+  if (!el || !guest.active) return;
+  el.textContent = guest.live ? $('#controlBadge').textContent : (guest.diagMsg || $('#guestStatus').textContent);
+  $('#askBtnM').textContent = guest.hasControl ? 'Restituisci' : 'Chiedi i comandi';
+  $('#askBtnM').hidden = !guest.connected;
+}
+
+// Tiene lo schermo acceso mentre si guarda
+async function keepAwake() {
+  try {
+    if ('wakeLock' in navigator && document.visibilityState === 'visible') await navigator.wakeLock.request('screen');
+  } catch (_) { /* non supportato o negato */ }
+}
+document.addEventListener('visibilitychange', () => {
+  if (guest.active && document.visibilityState === 'visible') keepAwake();
+});
 
 function gPress(b, down) {
   if (!guest.hasControl) return;
