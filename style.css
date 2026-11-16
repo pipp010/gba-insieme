@@ -202,10 +202,21 @@ body.has-control .pad { opacity: 1; }
     padding: 10px 18px calc(14px + env(safe-area-inset-bottom));
   }
   body.mode-guest .pad button { touch-action: none; }
-  body.mode-guest .shoulders button { width: 30vw; height: 42px; }
-  body.mode-guest .dpad { grid-template-columns: repeat(3, 17vw); grid-template-rows: repeat(3, 17vw); }
-  body.mode-guest .ab .round { width: 20vw; height: 20vw; font-size: 1.4rem; }
-  body.mode-guest .mid { flex-direction: column; gap: 10px; }
+  body.mode-guest main, body.mode-guest #guest, body.mode-guest .stage { overflow-x: hidden; }
+  body.mode-guest .shoulders button { width: 28vw; height: 42px; }
+  body.mode-guest .padRow {
+    display: grid;
+    grid-template-columns: auto auto;
+    grid-template-areas: "dpad ab" "mid mid";
+    justify-content: space-between;
+    align-items: center;
+    row-gap: 18px;
+  }
+  body.mode-guest .dpad { grid-area: dpad; grid-template-columns: repeat(3, 14vw); grid-template-rows: repeat(3, 14vw); }
+  body.mode-guest .ab { grid-area: ab; gap: 3vw; }
+  body.mode-guest .ab .round { width: 18vw; height: 18vw; font-size: 1.4rem; }
+  body.mode-guest .mid { grid-area: mid; flex-direction: row; justify-content: center; gap: 14px; }
+  body.mode-guest .pill { padding: 8px 16px; }
 }
 
 @media (max-width: 480px) {
